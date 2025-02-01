@@ -1,0 +1,55 @@
+name: Deploy with Terraform
+
+on:
+    push:
+        branches:
+            - main
+
+jobs:
+    backend-build-and-deploy:
+        name: Build, Push and Deploy Backend
+        runs-on: ubuntu-latest
+        steps:
+            -   name: Checkout
+                uses: actions/checkout@v3
+
+            -   name: Configure AWS Credentials
+                uses: aws-actions/configure-aws-credentials@v2
+                with:
+                    aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+                    aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+                    aws-region: ${{ secrets.AWS_REGION }}
+
+            -   name: Log in to Amazon ECR
+                uses: aws-actions/amazon-ecr-login@v2
+
+            -   name: Build Backend JAR
+                working-directory: ./backend
+                run: ./gradlew build --no-daemon
+
+            -   name: Build and Push Backend Docker Image
+                working-directory: ./backend
+                env:
+                    IMAGE_URI: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/backend:latest
+                run: |
+                    docker build -t $IMAGE_URI .
+                    docker push $IMAGE_URI
+
+            -   name: Install Terraform
+                run: |
+                    curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
+                    sudo apt-get update && sudo apt-get install -y gnupg software-properties-common
+                    sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
+                    sudo apt-get update && sudo apt-get install -y terraform
+
+            -   name: Terraform Init
+                working-directory: ./infra
+                run: terraform init
+
+            -   name: Terraform Plan
+                working-directory: ./infra
+                run: terraform plan -out tfplan
+
+            -   name: Terraform Apply
+                working-directory: ./infra
+                run: terraform apply -auto-approve tfplan

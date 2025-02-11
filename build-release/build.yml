@@ -1,0 +1,152 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ${{ matrix.os }}
+    
+    strategy:
+      matrix:
+        os: [macos-latest, windows-latest]
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install
+        env:
+          NODE_OPTIONS: '--no-warnings'
+      
+      # Windowsの場合のディレクトリ作成
+      - name: Create dist directory (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          mkdir dist 2>nul || true
+          mkdir dist\styles 2>nul || true
+          mkdir dist\main 2>nul || true
+          mkdir dist\preload 2>nul || true
+        shell: cmd
+
+      # Windowsの場合のビルド
+      - name: Build application (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          rmdir /s /q dist 2>nul || true
+          mkdir dist
+          mkdir dist\styles
+          mkdir dist\main
+          mkdir dist\preload
+          echo "Building store.js..."
+          npm run build:store
+          echo "Building main.js..."
+          npm run build:ts
+          type dist\main\main.js > nul 2>&1 || (echo "main.js was not created" && exit 1)
+          echo "Building preload..."
+          npm run build:preload
+          echo "Building CSS..."
+          npm run build:css
+          echo "Building app..."
+          npm run build:app
+          echo "Copying HTML..."
+          copy src\renderer\index.html dist\
+          echo "Checking build files..."
+          dir dist\main
+        shell: cmd
+
+      # Macの場合のビルド
+      - name: Build application (Mac)
+        if: matrix.os == 'macos-latest'
+        run: npm run build
+
+      # ビルドファイルの確認（Windows）
+      - name: Check build files (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          dir dist
+          dir dist\main
+        shell: cmd
+
+      # ビルドファイルの確認（Mac）
+      - name: Check build files (Mac)
+        if: matrix.os == 'macos-latest'
+        run: |
+          ls -la dist/
+          ls -la dist/main/
+        shell: bash
+
+      # Windows用のビルド
+      - name: Build Windows App
+        if: matrix.os == 'windows-latest'
+        run: |
+          echo "Contents of dist\main directory:"
+          dir dist\main
+          echo "Building with electron-builder..."
+          npm run build:ts
+          dir dist\main
+          npx electron-builder --win --x64
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Mac用のビルド
+      - name: Build Mac App
+        if: matrix.os == 'macos-latest'
+        run: |
+          echo "Installing build dependencies..."
+          brew install vips pkg-config
+          echo "Cleaning up previous builds..."
+          rm -rf dist/mac dist/mac-arm64
+          echo "Building Mac App..."
+          rm -rf node_modules/sharp
+          CURRENT_ARCH=$(uname -m)
+          if [ "$CURRENT_ARCH" = "arm64" ]; then
+            echo "Installing sharp for arm64..."
+            npm install --platform=darwin --arch=arm64 @img/sharp-darwin-arm64
+          else
+            echo "Installing sharp for x64..."
+            npm install --platform=darwin --arch=x64 @img/sharp-darwin-x64
+          fi
+          npm run package-mac
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHARP_IGNORE_GLOBAL_LIBVIPS: "1"
+          npm_config_platform: darwin
+          npm_config_build_from_source: false
+
+      # ビルド成果物の確認
+      - name: Check build artifacts
+        run: |
+          echo "Checking build artifacts..."
+          ls -la dist/
+        shell: bash
+
+      # GitHub Releaseの作成
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            dist/*.zip
+            dist/*.exe
+          fail_on_unmatched_files: false
+          draft: false
+          prerelease: false
+          token: ${{ secrets.GITHUB_TOKEN }}
+          generate_release_notes: true
+          retry: 3
+          # 既存のアセットを削除
+          remove_assets: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
